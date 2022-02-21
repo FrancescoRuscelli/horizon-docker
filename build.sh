@@ -2,6 +2,6 @@
 
 IMAGE=horizon
 
-docker build --rm -t ${IMAGE} .
+docker build --build-arg CACHE_DATE="$(date)"--rm -t ${IMAGE} .
 
 
