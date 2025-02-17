@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 # Use a build argument for the ROS version
 ARG ROS_VERSION=noetic
 
@@ -8,17 +9,24 @@ FROM ros:${ROS_VERSION}-robot
 ARG ROS_VERSION
 
 # Update package lists and install dependencies
-# python3-tk libjpeg-dev
-RUN apt-get update && apt-get install -y sudo build-essential gfortran git curl python3-pip python3-tk wget patchelf
-# install rviz for visualization
-RUN apt-get install -y ros-noetic-rviz
-# required for casadi
+RUN apt-get update && apt-get install -y sudo build-essential gfortran git curl python3-tk python3-pip libjpeg-dev wget patchelf nano libglfw3-dev
+
 RUN apt-get install -y libassimp-dev liblapack-dev libblas-dev libyaml-cpp-dev libmatio-dev
+# require for cartesio_acceleration_support
+RUN apt-get install -y ros-${ROS_VERSION}-interactive-markers ros-${ROS_VERSION}-moveit
 # required for casadi python bindings
 RUN apt-get install -y swig
+# required for realsense
+RUN apt-get install -y ros-noetic-gazebo-ros-pkgs
 
 # Install ROS catkin tools
-# RUN apt-get install -y ros-${ROS_VERSION}-catkin
+RUN apt-get install -y ros-${ROS_VERSION}-catkin
+
+# Upgrade cmake for forest
+RUN wget https://github.com/Kitware/CMake/releases/download/v3.31.4/cmake-3.31.4-linux-x86_64.tar.gz
+RUN tar -xvf cmake-3.31.4-linux-x86_64.tar.gz 
+RUN cd cmake-3.31.4-linux-x86_64 && sudo cp -r bin/* /usr/local/bin/
+RUN cd cmake-3.31.4-linux-x86_64 && sudo cp -r share/* /usr/local/share/
 
 # Upgrade pip and install the latest version of NumPy 
 # only required for ROS noetic
@@ -27,80 +35,73 @@ RUN pip3 install --upgrade pip \
 
 RUN pip3 install hhcm-forest
 
-# required packages for horizon
-RUN pip3 install PyQt5 scipy numpy_ros matplotlib 
+# required packages
+RUN pip3 install scipy numpy_ros matplotlib
 
-# Download and install CMake version 3.15
-# only required for melodic
-# RUN wget --no-check-certificate https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.sh && \
-#     chmod +x cmake-3.15.0-Linux-x86_64.sh && \
-#     ./cmake-3.15.0-Linux-x86_64.sh --skip-license --prefix=/usr/local && \
-#     rm cmake-3.15.0-Linux-x86_64.sh
+# Check NumPy version
+RUN python3 -c "import numpy; print('NumPy version:', numpy.__version__)"
 
-# required for displaying matplotlib plots
-ENV DISPLAY :1
-# add user with sudo privileges which is not prompted for password
-RUN adduser --disabled-password --gecos '' user
-RUN adduser user sudo
-RUN echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-USER user
-WORKDIR /home/user
-ENV PATH="/home/user/.local/bin:${PATH}"
+# Verify CMake installation
+RUN cmake --version
 
-# set up forest for installation
-RUN mkdir forest_ws
+ARG USER_NAME=user
+# add user
+RUN adduser -u 1005 --disabled-password --gecos '' ${USER_NAME} \
+    && adduser ${USER_NAME} sudo \
+    && echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers \
+    && usermod -aG sudo ${USER_NAME} \
+    && mkdir -p /home/${USER_NAME}/.ssh \
+    && chmod 700 /home/${USER_NAME}/.ssh \
+    && touch /home/${USER_NAME}/.ssh/known_hosts \
+    && ssh-keyscan github.com >> /home/${USER_NAME}/.ssh/known_hosts \
+    && chown -R ${USER_NAME}:${USER_NAME} /home/${USER_NAME}/.ssh
 
-WORKDIR /home/user/forest_ws
+RUN mkdir -p /home/${USER_NAME}/horizon_ws
+RUN chown ${USER_NAME} /home/${USER_NAME}/horizon_ws
+
+# update keys and install xbot2
+RUN sudo sh -c 'echo "deb http://xbot.cloud/xbot2/ubuntu/$(lsb_release -sc) /" > /etc/apt/sources.list.d/xbot-latest.list'
+RUN wget -q -O - http://xbot.cloud/xbot2/ubuntu/KEY.gpg | sudo apt-key add -
+RUN sudo apt-get update
+RUN sudo apt-get install -y xbot2_desktop_full
+
+user ${USER_NAME}
+ENV PATH="/home/${USER_NAME}/.local/bin:${PATH}"
+
+RUN echo "source /opt/ros/noetic/setup.bash" >> ~/.bashrc
+RUN echo ". /opt/xbot/setup.sh" >> ~/.bashrc
+
+WORKDIR  /home/${USER_NAME}/horizon_ws
 RUN forest init 
 
 # source forest
-RUN echo "source ~/forest_ws/setup.bash" >> ~/.bashrc
+RUN echo "source ~/horizon_ws/setup.bash" >> ~/.bashrc
 
-# # restart bash to make the source effective
+# restart bash to make the source effective
 SHELL ["bash", "-ic"]
+
 RUN echo $ROS_PACKAGE_PATH
 
-# add custom recipes
-ADD recipes /home/user/forest_ws/recipes
-
-# install pybind11 ---> because ros-noetic-catkin install pybind11_cmake, that is found from forest, that won't install its version
-#                          but casadi_kin_dyn, trying to include <pybind11/pybind11>, 
-#                          fails to find it because it should include it like <pybind11_cmake/pybind11/pybind11>
-
-# RUN forest grow pybind11 --clone-protocol https -j7
-
-# install horizon
-RUN forest grow horizon --clone-protocol https -j7 --verbose
-
-# python3 -m horizon.examples.spot --r --action walk
-
-# # install catkin workspace
-# WORKDIR /home/user/
-# RUN mkdir -p kyon_ws/src
-# RUN cd ~/kyon_ws && rosdep update && rosdep install --from-paths src --ignore-src -r -y
-# RUN . /opt/ros/${ROS_VERSION}/setup.sh && cd ~/kyon_ws && catkin_make install
-
-# source forest
-# RUN echo "source ~/forest_ws/setup.bash" >> ~/.bashrc
-
-# pip install -e . --no-deps --verbose
-# # restart bash to make the source effective
-# SHELL ["bash", "-ic"]
-
-# clone and install phase_manager
-# RUN cd ~/forest_ws/src && git clone https://github.com/FrancescoRuscelli/phase_manager
-# RUN mkdir -p ~/forest_ws/build/phase_manager
-# WORKDIR /home/user/forest_ws/build/phase_manager
-# RUN cmake ../../src/phase_manager -DCMAKE_INSTALL_PREFIX=/home/user/forest_ws/install .
-# RUN make -j8 install
-
-# # # break cache for re-installation of kyon (to always download the last version)
+# break cache for re-installation of casadi (to always download the last version)
 # ARG CACHE_DATE="date"
 
-# # Clean up package lists to reduce image size
-# RUN apt-get clean && \
-#     rm -rf /var/lib/apt/lists/*
+# add recipes
+RUN forest add-recipes git@github.com:ADVRHumanoids/multidof_recipes.git --clone-protocol https --tag fr_recipes
 
+# install pybind
+RUN forest grow pybind11 --clone-protocol https -j7
 
-# roslaunch kyon_codesign lower_body_action.launch action:=trot
+# install hpp-fcl
+RUN forest grow hpp-fcl --clone-protocol https -j7
 
+#install pinocchio
+RUN forest grow pinocchio --clone-protoco https -j7
+
+# install casadi
+RUN forest grow casadi --clone-protocol https -j7
+
+# install casadi_kin_dyn
+RUN forest grow casadi_kin_dyn --clone-protocol https -j7
+
+# install horizon
+RUN forest grow horizon --clone-protocol https -j7

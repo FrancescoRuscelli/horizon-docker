@@ -2,6 +2,5 @@
 
 IMAGE=horizon
 
-docker build --build-arg CACHE_DATE="$(date)"--rm -t ${IMAGE} .
-
-
+DOCKER_BUILDKIT=1 docker build --build-arg CACHE_DATE="$(date)"--rm -t ${IMAGE} . #--progress=plain --no-cache
+    
